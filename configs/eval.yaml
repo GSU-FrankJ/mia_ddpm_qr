@@ -1,0 +1,7 @@
+eval:
+  alpha: 0.01
+  mode: eps
+  K: 4
+  batch_size: 128
+  bootstrap: 200
+  seed: 0

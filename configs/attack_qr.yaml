@@ -1,0 +1,18 @@
+dataset: cifar10
+seed: 0
+img_size: 32
+public:
+  K: 12
+  mode: eps
+  timesteps: uniform
+  batch_size: 32
+qr:
+  arch: resnet_tiny
+  opt: adam
+  lr: 1.0e-3
+  epochs: 30
+  batch_size: 256
+  alpha_list: [0.01, 0.001]
+bagging:
+  M: 16
+  bootstrap: true

@@ -1,0 +1,27 @@
+dataset: cifar10
+img_size: 32
+arch: unet_small
+data_root: data
+train:
+  batch_size: 128
+  epochs: 200
+  lr: 2.0e-4
+  betas: [0.9, 0.999]
+  weight_decay: 0.0
+  ema: true
+  ema_decay: 0.999
+  grad_clip: 1.0
+  seed: 0
+  num_workers: 4
+diffusion:
+  T: 1000
+  beta_schedule: linear
+  loss: eps_mse
+model:
+  base_channels: 128
+  channel_mults: [1, 2, 2, 4]
+  num_res_blocks: 2
+  dropout: 0.0
+logging:
+  log_interval: 100
+  out_dir: runs/ddpm/cifar10

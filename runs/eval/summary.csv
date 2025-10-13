@@ -1,0 +1,2 @@
+dataset,alpha,mode,M,K,AUC,TPR@1%,TPR@0.1%
+cifar10,0.01,eps,2,4,0.5003305568,0.0108,0.00192
