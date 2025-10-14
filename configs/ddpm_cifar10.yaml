@@ -1,27 +1,27 @@
-dataset: cifar10
-img_size: 32
-arch: unet_small
-data_root: data
-train:
-  batch_size: 128
-  epochs: 200
-  lr: 2.0e-4
-  betas: [0.9, 0.999]
-  weight_decay: 0.0
-  ema: true
-  ema_decay: 0.999
-  grad_clip: 1.0
-  seed: 0
-  num_workers: 4
-diffusion:
-  T: 1000
-  beta_schedule: linear
-  loss: eps_mse
-model:
-  base_channels: 128
-  channel_mults: [1, 2, 2, 4]
-  num_res_blocks: 2
-  dropout: 0.0
-logging:
-  log_interval: 100
-  out_dir: runs/ddpm/cifar10
+  dataset: cifar10
+  img_size: 32
+  arch: unet_small # 使用小型 U-Net 架构
+  data_root: data
+  train:
+    batch_size: 128        # 批次大小
+    epochs: 200           # 训练 200 个 epoch
+    lr: 2.0e-4           # 学习率 0.0002
+    betas: [0.9, 0.999]   # Adam 优化器的 beta 参数
+    weight_decay: 0.0     # 不使用权重衰减
+    ema: true            # 启用指数移动平均
+    ema_decay: 0.999     # EMA 衰减率
+    grad_clip: 1.0       # 梯度裁剪阈值
+    seed: 0              # 随机种子
+    num_workers: 4       # 数据加载器工作进程数
+  diffusion:
+    T: 1000              # 扩散步数（噪声调度步数）
+    beta_schedule: linear # 线性 beta 调度
+    loss: eps_mse        # 使用 epsilon 预测的 MSE 损失
+  model:
+    base_channels: 128
+    channel_mults: [1, 2, 2, 2] # 通道倍数，形成 [128, 256, 256, 512] 的通道数
+    num_res_blocks: 2 # 每个分辨率级别的残差块数量
+    dropout: 0.1 # 使用 dropout
+  logging:
+    log_interval: 100
+    out_dir: runs/ddpm/cifar10

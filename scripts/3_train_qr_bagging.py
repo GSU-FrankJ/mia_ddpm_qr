@@ -24,6 +24,11 @@ def main() -> None:
     parser.add_argument("--split_json", type=str, default=None, help="Optional split JSON for public indices.")
     parser.add_argument("--device", type=str, default="cuda", help="Training device.")
     parser.add_argument("--data-root", type=str, default="data", help="Dataset root.")
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="Skip training for ensemble members whose checkpoints already exist.",
+    )
     args = parser.parse_args()
 
     config = yaml.safe_load(Path(args.config).read_text())
@@ -60,9 +65,9 @@ def main() -> None:
         img_size=config.get("img_size", 32),
         data_root=args.data_root,
         device=args.device,
+        skip_existing=args.skip_existing,
     )
 
 
 if __name__ == "__main__":
     main()
-

@@ -1,7 +1,7 @@
 eval:
-  alpha: 0.01
-  mode: eps
-  K: 4
-  batch_size: 128
-  bootstrap: 200
-  seed: 0
+  alpha: 0.01        # 正则化参数，用于模型选择
+  mode: eps         # 使用 epsilon 预测模式
+  K: 4              # 每个样本生成 4 个时间步误差对
+  batch_size: 128   # 评估批次大小
+  bootstrap: 200    # Bootstrap 采样次数
+  seed: 0          # 随机种子

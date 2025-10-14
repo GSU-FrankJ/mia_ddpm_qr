@@ -1,0 +1,59 @@
+{
+  "attack_config": {
+    "dataset": "cifar10",
+    "seed": 0,
+    "img_size": 32,
+    "public": {
+      "K": 12,
+      "mode": "eps",
+      "timesteps": "uniform",
+      "batch_size": 32
+    },
+    "qr": {
+      "arch": "resnet_tiny",
+      "opt": "adam",
+      "lr": 0.001,
+      "epochs": 30,
+      "batch_size": 256,
+      "alpha_list": [
+        0.01,
+        0.001
+      ]
+    },
+    "bagging": {
+      "M": 16,
+      "bootstrap": true
+    }
+  },
+  "ddpm_metadata": {
+    "config_path": "/home/fjiang4/mia_ddpm_qr/configs/ddpm_cifar10.yaml",
+    "split_json": "/home/fjiang4/mia_ddpm_qr/runs/splits/cifar10_seed0.json",
+    "dataset": "cifar10",
+    "img_size": 32,
+    "diffusion": {
+      "T": 1000,
+      "beta_schedule": "linear",
+      "loss": "eps_mse"
+    },
+    "arch": "unet_small",
+    "model_params": {
+      "base_channels": 128,
+      "channel_mults": [
+        1,
+        2,
+        2,
+        4
+      ],
+      "num_res_blocks": 2,
+      "dropout": 0.0
+    }
+  },
+  "pairs_stats": {
+    "dataset": "cifar10",
+    "global_seed": 0,
+    "mode": "eps",
+    "K": 12,
+    "T": 1000,
+    "pairs": 150000
+  }
+}

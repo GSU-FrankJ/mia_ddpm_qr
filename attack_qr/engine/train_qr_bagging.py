@@ -104,6 +104,7 @@ def train_bagging_ensemble(
     img_size: int,
     data_root: str,
     device: str | torch.device = "cuda",
+    skip_existing: bool = False,
 ) -> None:
     seed_everything(config.seed)
     device = torch.device(device)
@@ -114,7 +115,8 @@ def train_bagging_ensemble(
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    manifest = {
+    manifest_path = out_dir / "manifest.json"
+    base_manifest = {
         "dataset": dataset_name,
         "alpha_list": list(config.alpha_list),
         "bootstrap": config.bootstrap,
@@ -124,37 +126,89 @@ def train_bagging_ensemble(
         "models": [],
     }
 
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        for key, value in base_manifest.items():
+            if key == "models":
+                continue
+            if manifest.get(key) != value:
+                raise ValueError(
+                    f"Existing manifest at {manifest_path} has {key}={manifest.get(key)} but expected {value}."
+                )
+    else:
+        manifest = base_manifest
+
+    manifest.setdefault("models", [])
+    manifest_lookup = {entry["path"]: entry for entry in manifest["models"]}
+
+    def save_manifest() -> None:
+        with manifest_path.open("w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2)
+
+    if skip_existing and not manifest_path.exists():
+        existing_ckpts = sorted(out_dir.glob("model_*.pt"))
+        for ckpt_path in existing_ckpts:
+            rel_path = ckpt_path.name
+            if rel_path in manifest_lookup:
+                continue
+            ckpt = torch.load(ckpt_path, map_location="cpu")
+            entry = {
+                "path": rel_path,
+                "seed": ckpt.get("seed"),
+                "loss": (ckpt.get("losses") or [None])[-1],
+            }
+            if ckpt.get("bootstrap_indices") is not None:
+                entry["bootstrap_indices"] = ckpt["bootstrap_indices"]
+            manifest["models"].append(entry)
+            manifest_lookup[rel_path] = entry
+        if existing_ckpts:
+            save_manifest()
+
     indices = np.arange(len(data))
     rng_master = np.random.default_rng(config.seed)
 
     for m in tqdm(range(config.M), desc="Bagging"):
-        rng = np.random.default_rng(rng_master.integers(0, 2**63 - 1))
+        master_seed = int(rng_master.integers(0, 2**63 - 1))
+        rng = np.random.default_rng(master_seed)
+        ckpt_path = out_dir / f"model_{m:03d}.pt"
+        rel_path = str(ckpt_path.relative_to(out_dir))
+        existing_entry = manifest_lookup.get(rel_path)
+
+        if skip_existing and ckpt_path.exists() and existing_entry is not None:
+            continue
+        if ckpt_path.exists() and not skip_existing:
+            raise FileExistsError(f"Checkpoint {ckpt_path} already exists. Remove it or use --skip-existing.")
+
         if config.bootstrap:
             sampled_indices = bootstrap_indices(len(indices), rng)
             subset = Subset(data, sampled_indices.tolist())
+            sampled_list = sampled_indices.tolist()
         else:
             subset = data
+            sampled_list = None
+
         model_seed = int(rng.integers(0, 2**31 - 1))
         seed_everything(model_seed)
         model, losses = train_single_model(subset, config, model_seed, device)
-        ckpt_path = out_dir / f"model_{m:03d}.pt"
         torch.save(
             {
                 "model": model.state_dict(),
                 "alpha_list": list(config.alpha_list),
                 "seed": model_seed,
                 "losses": losses,
+                "bootstrap_indices": sampled_list,
             },
             ckpt_path,
         )
         entry = {
-            "path": str(ckpt_path.relative_to(out_dir)),
+            "path": rel_path,
             "seed": model_seed,
             "loss": losses[-1] if losses else None,
         }
         if config.bootstrap:
-            entry["bootstrap_indices"] = sampled_indices.tolist()
-        manifest["models"].append(entry)
+            entry["bootstrap_indices"] = sampled_list
 
-    with (out_dir / "manifest.json").open("w", encoding="utf-8") as f:
-        json.dump(manifest, f, indent=2)
+        manifest_lookup[rel_path] = entry
+        manifest["models"] = [e for e in manifest["models"] if e["path"] != rel_path]
+        manifest["models"].append(entry)
+        save_manifest()
