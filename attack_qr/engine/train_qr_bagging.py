@@ -35,7 +35,7 @@ class QuantilePairsDataset(Dataset):
         self.idx_to_pos = {idx: pos for pos, idx in enumerate(self.dataset.indices)}
         if not self.image_ids:
             raise ValueError("No public samples available for quantile regression.")
-        example = pairs_by_image[self.image_ids[0]][\"stats\"]
+        example = pairs_by_image[self.image_ids[0]]["stats"]
         self.stats_dim = example.shape[1]
 
     def __len__(self) -> int:
@@ -46,20 +46,20 @@ class QuantilePairsDataset(Dataset):
         pos = self.idx_to_pos[img_id]
         img, _, _ = self.dataset[pos]
         pair_info = self.pairs_by_image[img_id]
-        choice = np.random.randint(0, pair_info[\"t_error\"].shape[0])
-        stats = torch.tensor(pair_info[\"stats\"][choice], dtype=torch.float32)
-        target = torch.tensor(pair_info[\"t_error\"][choice], dtype=torch.float32)
+        choice = np.random.randint(0, pair_info["t_error"].shape[0])
+        stats = torch.tensor(pair_info["stats"][choice], dtype=torch.float32)
+        target = torch.tensor(pair_info["t_error"][choice], dtype=torch.float32)
         return img, stats, target
 
 
 def load_pairs(npz_path: str | Path) -> dict[int, dict[str, np.ndarray]]:
     with np.load(npz_path) as data:
-        image_ids = data[\"image_id\"].astype(np.int64)
-        t_error = data[\"t_error\"].astype(np.float32)
-        t_frac = data[\"t_frac\"].astype(np.float32)
-        mean = data[\"mean\"].astype(np.float32)
-        std = data[\"std\"].astype(np.float32)
-        norm2 = data[\"norm2\"].astype(np.float32)
+        image_ids = data["image_id"].astype(np.int64)
+        t_error = data["t_error"].astype(np.float32)
+        t_frac = data["t_frac"].astype(np.float32)
+        mean = data["mean"].astype(np.float32)
+        std = data["std"].astype(np.float32)
+        norm2 = data["norm2"].astype(np.float32)
 
     pairs: dict[int, dict[str, np.ndarray]] = {}
     unique_ids = np.unique(image_ids)
@@ -67,8 +67,8 @@ def load_pairs(npz_path: str | Path) -> dict[int, dict[str, np.ndarray]]:
         mask = image_ids == img_id
         stats = np.stack([t_frac[mask], mean[mask], std[mask], norm2[mask]], axis=1)
         pairs[int(img_id)] = {
-            \"t_error\": t_error[mask],
-            \"stats\": stats,
+            "t_error": t_error[mask],
+            "stats": stats,
         }
     return pairs
 
@@ -95,7 +95,12 @@ def train_single_model(
     device: torch.device,
 ) -> tuple[ResNet18QR, List[float]]:
     seed_everything(model_seed)
-    model = ResNet18QR(num_outputs=len(config.alpha_list), stats_dim=dataset.stats_dim).to(device)
+    stats_dim = getattr(dataset, "stats_dim", None)
+    if stats_dim is None and hasattr(dataset, "dataset"):
+        stats_dim = getattr(dataset.dataset, "stats_dim", None)
+    if stats_dim is None:
+        raise AttributeError("Quantile dataset must expose stats_dim")
+    model = ResNet18QR(num_outputs=len(config.alpha_list), stats_dim=stats_dim).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
     loader = DataLoader(dataset, batch_size=config.batch_size, shuffle=True, num_workers=0, pin_memory=True)
     alpha_tensor = torch.tensor(config.alpha_list, dtype=torch.float32, device=device)
@@ -209,6 +214,7 @@ def train_bagging_ensemble(
         if config.bootstrap:
             sampled_indices = bootstrap_indices(len(indices), rng)
             subset = Subset(data, sampled_indices.tolist())
+            setattr(subset, "stats_dim", data.stats_dim)
             sampled_list = sampled_indices.tolist()
             sampled_image_ids = [int(data.image_ids[i]) for i in sampled_list]
         else:
