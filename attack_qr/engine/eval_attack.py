@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from attack_qr.features.t_error import compute_t_error
-from attack_qr.models.qr_resnet_tiny import ResNetTiny
+from attack_qr.models.qr_resnet18 import ResNet18QR
 from attack_qr.utils.metrics import bootstrap_metrics, compute_roc, interpolate_tpr
 from attack_qr.utils.seeding import seed_everything, timesteps_seed
 from ddpm.data.loader import IndexedDataset, get_dataset, get_transforms
@@ -23,25 +23,26 @@ from ddpm.schedules.noise import DiffusionSchedule
 @dataclass
 class EvalConfig:
     alpha: float
-    mode: str = "eps"
+    mode: str = "x0"
     K: int = 4
     batch_size: int = 128
     bootstrap: int = 200
     seed: int = 0
 
 
-def load_quantile_ensemble(models_dir: str | Path, device: torch.device) -> tuple[list[ResNetTiny], List[float]]:
+def load_quantile_ensemble(models_dir: str | Path, device: torch.device) -> tuple[list[ResNet18QR], List[float]]:
     models_dir = Path(models_dir)
     manifest_path = models_dir / "manifest.json"
     if not manifest_path.exists():
         raise FileNotFoundError(f"Missing manifest at {manifest_path}")
     manifest = json.loads(manifest_path.read_text())
     alpha_list = manifest["alpha_list"]
+    stats_dim = manifest.get("stats_dim", 4)
     ensemble = []
     for entry in manifest["models"]:
         ckpt_path = models_dir / entry["path"]
         ckpt = torch.load(ckpt_path, map_location=device)
-        model = ResNetTiny(num_outputs=len(alpha_list)).to(device)
+        model = ResNet18QR(num_outputs=len(alpha_list), stats_dim=stats_dim).to(device)
         model.load_state_dict(ckpt["model"])
         model.eval()
         ensemble.append(model)
@@ -57,7 +58,7 @@ def prepare_eval_dataloaders(
     batch_size: int,
 ) -> tuple[DataLoader, DataLoader]:
     base = get_dataset(dataset_name, root=data_root, download=True)
-    transform = get_transforms(dataset_name, img_size, augment=False)
+    transform = get_transforms(img_size, augment=False)
     member_dataset = IndexedDataset(base, indices=member_indices, transform=transform)
     nonmember_dataset = IndexedDataset(base, indices=nonmember_indices, transform=transform)
 
@@ -67,7 +68,7 @@ def prepare_eval_dataloaders(
     return _loader(member_dataset), _loader(nonmember_dataset)
 
 
-def _average_t_error(
+def _collect_sample_info(
     ddpm_model: torch.nn.Module,
     schedule: DiffusionSchedule,
     images: torch.Tensor,
@@ -76,16 +77,17 @@ def _average_t_error(
     global_seed: int,
     K: int,
     mode: str,
-) -> torch.Tensor:
+) -> List[dict]:
     device = images.device
-    values = []
+    denom = max(1, schedule.T - 1)
+    outputs: List[dict] = []
     for img, idx in zip(images, indices):
         idx_int = int(idx)
         rng = np.random.default_rng(timesteps_seed(dataset_name, idx_int, global_seed))
         timesteps = rng.integers(low=0, high=schedule.T, size=K, endpoint=False)
-        x_batch = img.unsqueeze(0).repeat(K, 1, 1, 1)
         t_tensor = torch.as_tensor(timesteps, device=device, dtype=torch.long)
-        err = compute_t_error(
+        x_batch = img.unsqueeze(0).repeat(K, 1, 1, 1)
+        errors = compute_t_error(
             model=ddpm_model,
             schedule=schedule,
             x0=x_batch,
@@ -95,14 +97,34 @@ def _average_t_error(
             global_seed=global_seed,
             mode=mode,
         )
-        values.append(err.mean().item())
-    return torch.tensor(values, device=device)
+        mean_val = float(img.mean().item())
+        std_val = float(img.std(unbiased=False).item())
+        norm2_val = float(torch.linalg.norm(img.float()).item())
+        t_frac = t_tensor.float() / denom
+        stats = torch.stack(
+            [
+                t_frac,
+                torch.full_like(t_frac, mean_val),
+                torch.full_like(t_frac, std_val),
+                torch.full_like(t_frac, norm2_val),
+            ],
+            dim=1,
+        )
+        outputs.append(
+            {
+                "image": img.unsqueeze(0),
+                "stats": stats,
+                "mean_error": float(errors.mean().item()),
+                "index": idx_int,
+            }
+        )
+    return outputs
 
 
 def evaluate_attack(
     ddpm_model: torch.nn.Module,
     schedule: DiffusionSchedule,
-    ensemble: list[ResNetTiny],
+    ensemble: list[ResNet18QR],
     alpha_list: Sequence[float],
     config: EvalConfig,
     dataset_name: str,
@@ -140,16 +162,42 @@ def evaluate_attack(
     def _process(loader, label):
         for images, _, idxs in tqdm(loader, desc=f"Eval label={label}"):
             images = images.to(device, non_blocking=True)
-            l_bar = _average_t_error(ddpm_model, schedule, images, idxs, dataset_name, global_seed, config.K, config.mode)
-            preds = [model(images).detach()[:, alpha_idx] for model in ensemble]
-            preds_tensor = torch.stack(preds, dim=0)
-            margins = preds_tensor - l_bar.unsqueeze(0)
+            sample_infos = _collect_sample_info(
+                ddpm_model=ddpm_model,
+                schedule=schedule,
+                images=images,
+                indices=idxs,
+                dataset_name=dataset_name,
+                global_seed=global_seed,
+                K=config.K,
+                mode=config.mode,
+            )
+            mean_errors = torch.tensor([info["mean_error"] for info in sample_infos], device=device)
+
+            model_margins = []
+            for model in ensemble:
+                preds_per_sample = []
+                for info in sample_infos:
+                    stats = info["stats"]
+                    img_rep = info["image"].repeat(stats.size(0), 1, 1, 1)
+                    preds = model(img_rep, stats).detach()[:, alpha_idx].mean()
+                    preds_per_sample.append(preds)
+                preds_stack = torch.stack(preds_per_sample)
+                model_margins.append(preds_stack - mean_errors)
+
+            margins = torch.stack(model_margins)
             vote_counts = (margins > 0).sum(dim=0)
             score = margins.mean(dim=0)
-            for idx_val, s_val, votes, t_err in zip(idxs.tolist(), score.cpu().tolist(), vote_counts.cpu().tolist(), l_bar.cpu().tolist()):
+
+            for info, s_val, votes, t_err in zip(
+                sample_infos,
+                score.cpu().tolist(),
+                vote_counts.cpu().tolist(),
+                mean_errors.cpu().tolist(),
+            ):
                 records.append(
                     {
-                        "image_id": int(idx_val),
+                        "image_id": int(info["index"]),
                         "label": int(label),
                         "score": float(s_val),
                         "vote_count": int(votes),

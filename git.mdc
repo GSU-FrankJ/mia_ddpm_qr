@@ -1,0 +1,59 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+---
+description: 辅助生成 git 提交信息
+globs: 
+alwaysApply: false
+---
+# Git Rules
+
+## Important principles
+- **Important**: Don't commit git code automatically unless explicitly prompted to do so.
+- Make sure your code passes all tests before committing
+- Keep commits simple and descriptive of changes
+- Avoid large commits and try to break up changes into small, related commits.
+
+## Commit specification
+The git commit template <type>(<scope>): <subject> has the following requirements:
+1. Note the space after the colon :.
+2. type has enum values:
+- feat: add new feature
+- fix: fix bugs
+- docs: document comments
+- style: code format (changes that don't affect how the code runs)
+- refactor: refactoring, optimization (neither adding new features, nor fixing bugs)
+- perf: performance optimization
+- test: adding tests
+- chore: Changes to the build process or auxiliary tools.
+- revert: To roll back
+- build: package
+3. If more than two bullet points are described in the subject, describe the details using a bullet point list, starting each bullet point with a - sign and multiple newlines, as in the following example:
+```
+feat(web): implement email verification workflow
+
+- Add email verification token generation service
+- Create verification email template with dynamic links
+- Add API endpoint for token validation
+- Update user model with verification status field
+```
+
+## Branching
+- main/master: Main branch, stable and ready for release.
+- develop: The development branch, containing the latest development features
+- feature/*: feature branch, used to develop new features.
+- bugfix/*: The bugfix branch, used for fixing bugs.
+- release/*: The release branch, used to prepare for releases.
+
+**Common branch naming conventions**:
+
+| Branch Types | Naming Format | Examples |
+| ---------- | -------------------- | ------------------------- |
+| feature branch | feature/[description] | feature/user-auth |
+| fix branch | fix/[issue-id]-[description] | fix/issue-42-login-crash |
+| release branch | release/[version] | release/v2.1.0 |
+| hotfix branch | hotfix/[version]-[description] | hotfix/v2.0.1-payment-fix |
+
+

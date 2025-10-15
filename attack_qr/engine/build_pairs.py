@@ -35,9 +35,11 @@ def build_t_error_pairs(
     records = {
         "image_id": [],
         "timestep": [],
+        "t_frac": [],
         "t_error": [],
         "mean": [],
         "std": [],
+        "norm2": [],
     }
     total_pairs = 0
 
@@ -47,6 +49,7 @@ def build_t_error_pairs(
             idx_int = int(idx)
             stats_mean = float(img.mean().item())
             stats_std = float(img.std(unbiased=False).item())
+            stats_norm2 = float(torch.linalg.norm(img.float()).item())
             rng_seed = timesteps_seed(dataset_name, idx_int, global_seed)
             rng = np.random.default_rng(rng_seed)
             timesteps = rng.integers(low=0, high=schedule.T, size=K, endpoint=False)
@@ -66,18 +69,22 @@ def build_t_error_pairs(
             for t_val, err in zip(timesteps.tolist(), errors.detach().cpu().tolist()):
                 records["image_id"].append(idx_int)
                 records["timestep"].append(int(t_val))
+                records["t_frac"].append(float(t_val / max(1, schedule.T - 1)))
                 records["t_error"].append(float(err))
                 records["mean"].append(stats_mean)
                 records["std"].append(stats_std)
+                records["norm2"].append(stats_norm2)
                 total_pairs += 1
 
     np.savez_compressed(
         out_path,
         image_id=np.array(records["image_id"], dtype=np.int32),
         timestep=np.array(records["timestep"], dtype=np.int32),
+        t_frac=np.array(records["t_frac"], dtype=np.float32),
         t_error=np.array(records["t_error"], dtype=np.float32),
         mean=np.array(records["mean"], dtype=np.float32),
         std=np.array(records["std"], dtype=np.float32),
+        norm2=np.array(records["norm2"], dtype=np.float32),
     )
 
     metadata = {
@@ -91,4 +98,3 @@ def build_t_error_pairs(
     with out_path.with_suffix(".meta.json").open("w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2)
     return metadata
-

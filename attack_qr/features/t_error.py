@@ -25,7 +25,7 @@ def compute_t_error(
     dataset_name: str,
     sample_indices: Sequence[int],
     global_seed: int,
-    mode: str = "eps",
+    mode: str = "x0",
 ) -> torch.Tensor:
     """
     Compute deterministic t-error for a batch of images.

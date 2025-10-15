@@ -10,7 +10,7 @@ import torch
 from torch.utils.data import DataLoader, Dataset, Subset
 from tqdm import tqdm
 
-from attack_qr.models.qr_resnet_tiny import ResNetTiny
+from attack_qr.models.qr_resnet18 import ResNet18QR
 from attack_qr.utils.losses import pinball_loss
 from attack_qr.utils.seeding import seed_everything
 from ddpm.data.loader import IndexedDataset, get_dataset, get_transforms
@@ -28,26 +28,49 @@ class QuantileTrainingConfig:
 
 
 class QuantilePairsDataset(Dataset):
-    def __init__(self, indexed_dataset: IndexedDataset, image_ids: np.ndarray, targets: np.ndarray):
+    def __init__(self, indexed_dataset: IndexedDataset, pairs_by_image: dict[int, dict[str, np.ndarray]]):
         self.dataset = indexed_dataset
-        self.image_ids = image_ids.astype(np.int64)
-        self.targets = targets.astype(np.float32)
+        self.pairs_by_image = pairs_by_image
+        self.image_ids = sorted(pairs_by_image.keys())
         self.idx_to_pos = {idx: pos for pos, idx in enumerate(self.dataset.indices)}
+        if not self.image_ids:
+            raise ValueError("No public samples available for quantile regression.")
+        example = pairs_by_image[self.image_ids[0]][\"stats\"]
+        self.stats_dim = example.shape[1]
 
     def __len__(self) -> int:
         return len(self.image_ids)
 
     def __getitem__(self, item: int):
-        idx = int(self.image_ids[item])
-        target = float(self.targets[item])
-        pos = self.idx_to_pos[idx]
+        img_id = int(self.image_ids[item])
+        pos = self.idx_to_pos[img_id]
         img, _, _ = self.dataset[pos]
-        return img, torch.tensor(target, dtype=torch.float32)
+        pair_info = self.pairs_by_image[img_id]
+        choice = np.random.randint(0, pair_info[\"t_error\"].shape[0])
+        stats = torch.tensor(pair_info[\"stats\"][choice], dtype=torch.float32)
+        target = torch.tensor(pair_info[\"t_error\"][choice], dtype=torch.float32)
+        return img, stats, target
 
 
-def load_pairs(npz_path: str | Path) -> dict:
+def load_pairs(npz_path: str | Path) -> dict[int, dict[str, np.ndarray]]:
     with np.load(npz_path) as data:
-        return {key: data[key] for key in data.files}
+        image_ids = data[\"image_id\"].astype(np.int64)
+        t_error = data[\"t_error\"].astype(np.float32)
+        t_frac = data[\"t_frac\"].astype(np.float32)
+        mean = data[\"mean\"].astype(np.float32)
+        std = data[\"std\"].astype(np.float32)
+        norm2 = data[\"norm2\"].astype(np.float32)
+
+    pairs: dict[int, dict[str, np.ndarray]] = {}
+    unique_ids = np.unique(image_ids)
+    for img_id in unique_ids:
+        mask = image_ids == img_id
+        stats = np.stack([t_frac[mask], mean[mask], std[mask], norm2[mask]], axis=1)
+        pairs[int(img_id)] = {
+            \"t_error\": t_error[mask],
+            \"stats\": stats,
+        }
+    return pairs
 
 
 def prepare_dataset(
@@ -57,7 +80,7 @@ def prepare_dataset(
     img_size: int,
 ) -> IndexedDataset:
     base_dataset = get_dataset(dataset_name, root=root, download=True)
-    transform = get_transforms(dataset_name, img_size, augment=False)
+    transform = get_transforms(img_size, augment=False)
     return IndexedDataset(base_dataset, indices=public_indices, transform=transform)
 
 
@@ -66,13 +89,13 @@ def bootstrap_indices(size: int, rng: np.random.Generator) -> np.ndarray:
 
 
 def train_single_model(
-    dataset: Dataset,
+    dataset: QuantilePairsDataset,
     config: QuantileTrainingConfig,
     model_seed: int,
     device: torch.device,
-) -> tuple[ResNetTiny, List[float]]:
+) -> tuple[ResNet18QR, List[float]]:
     seed_everything(model_seed)
-    model = ResNetTiny(num_outputs=len(config.alpha_list)).to(device)
+    model = ResNet18QR(num_outputs=len(config.alpha_list), stats_dim=dataset.stats_dim).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
     loader = DataLoader(dataset, batch_size=config.batch_size, shuffle=True, num_workers=0, pin_memory=True)
     alpha_tensor = torch.tensor(config.alpha_list, dtype=torch.float32, device=device)
@@ -81,10 +104,11 @@ def train_single_model(
     for epoch in range(config.epochs):
         model.train()
         losses = []
-        for images, targets in loader:
+        for images, stats, targets in loader:
             images = images.to(device, non_blocking=True)
+            stats = stats.to(device, non_blocking=True)
             targets = targets.to(device, non_blocking=True).unsqueeze(1).expand(-1, len(config.alpha_list))
-            preds = model(images)
+            preds = model(images, stats)
             loss = pinball_loss(preds, targets, alpha_tensor, reduction="mean")
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -108,10 +132,10 @@ def train_bagging_ensemble(
 ) -> None:
     seed_everything(config.seed)
     device = torch.device(device)
-    pairs = load_pairs(npz_path)
+    pairs_by_image = load_pairs(npz_path)
     dataset = prepare_dataset(dataset_name, root=data_root, public_indices=public_indices, img_size=img_size)
 
-    data = QuantilePairsDataset(dataset, pairs["image_id"], pairs["t_error"])
+    data = QuantilePairsDataset(dataset, pairs_by_image)
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -123,6 +147,7 @@ def train_bagging_ensemble(
         "M": config.M,
         "seed": config.seed,
         "public_indices": [int(i) for i in public_indices],
+        "stats_dim": data.stats_dim,
         "models": [],
     }
 
@@ -159,6 +184,8 @@ def train_bagging_ensemble(
             }
             if ckpt.get("bootstrap_indices") is not None:
                 entry["bootstrap_indices"] = ckpt["bootstrap_indices"]
+            if ckpt.get("bootstrap_image_ids") is not None:
+                entry["bootstrap_image_ids"] = ckpt["bootstrap_image_ids"]
             manifest["models"].append(entry)
             manifest_lookup[rel_path] = entry
         if existing_ckpts:
@@ -183,9 +210,11 @@ def train_bagging_ensemble(
             sampled_indices = bootstrap_indices(len(indices), rng)
             subset = Subset(data, sampled_indices.tolist())
             sampled_list = sampled_indices.tolist()
+            sampled_image_ids = [int(data.image_ids[i]) for i in sampled_list]
         else:
             subset = data
             sampled_list = None
+            sampled_image_ids = None
 
         model_seed = int(rng.integers(0, 2**31 - 1))
         seed_everything(model_seed)
@@ -197,6 +226,7 @@ def train_bagging_ensemble(
                 "seed": model_seed,
                 "losses": losses,
                 "bootstrap_indices": sampled_list,
+                "bootstrap_image_ids": sampled_image_ids,
             },
             ckpt_path,
         )
@@ -207,6 +237,7 @@ def train_bagging_ensemble(
         }
         if config.bootstrap:
             entry["bootstrap_indices"] = sampled_list
+            entry["bootstrap_image_ids"] = sampled_image_ids
 
         manifest_lookup[rel_path] = entry
         manifest["models"] = [e for e in manifest["models"] if e["path"] != rel_path]

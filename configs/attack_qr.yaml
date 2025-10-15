@@ -3,11 +3,11 @@ seed: 0
 img_size: 32
 public:
   K: 12                    # 每个样本生成 12 个时间步误差对
-  mode: eps               # 使用 epsilon 预测模式（与 DDPM 训练一致）
+  mode: x0                # 默认使用 x0 重建误差（论文主设定）
   timesteps: uniform      # 时间步采样方式：均匀分布
   batch_size: 32          # 生成误差对时的批次大小
 qr:
-  arch: resnet_tiny       # 使用小型 ResNet 作为量化回归模型架构
+  arch: resnet18          # 使用 ResNet-18 作为量化回归模型架构
   opt: adam              # 使用 Adam 优化器
   lr: 1.0e-3            # 学习率 0.001
   epochs: 30            # 训练 30 个 epoch

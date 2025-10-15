@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional
@@ -17,9 +18,10 @@ from ddpm.schedules.noise import DiffusionSchedule, q_sample
 
 @dataclass
 class OptimConfig:
-    lr: float = 2e-4
+    lr: float = 1e-4
     betas: tuple[float, float] = (0.9, 0.999)
     weight_decay: float = 0.0
+    warmup_steps: int = 500
 
 
 @dataclass
@@ -55,12 +57,7 @@ class EMAModel:
 
 
 def create_optimizer(model: torch.nn.Module, config: OptimConfig) -> torch.optim.Optimizer:
-    return torch.optim.AdamW(
-        model.parameters(),
-        lr=config.lr,
-        betas=config.betas,
-        weight_decay=config.weight_decay,
-    )
+    return torch.optim.Adam(model.parameters(), lr=config.lr, betas=config.betas, weight_decay=config.weight_decay)
 
 
 def train_ddpm(
@@ -80,6 +77,19 @@ def train_ddpm(
     schedule = schedule.to(device)
 
     optimizer = create_optimizer(model, optim_config)
+    steps_per_epoch = len(dataloader)
+    total_steps = train_config.epochs * steps_per_epoch
+
+    def lr_lambda(step: int) -> float:
+        if total_steps <= 0:
+            return 1.0
+        warmup = max(1, optim_config.warmup_steps)
+        if step < warmup:
+            return float(step + 1) / float(warmup)
+        progress = min(1.0, (step - warmup) / max(1, total_steps - warmup))
+        return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
     ema_helper = EMAModel(model, decay=train_config.ema_decay).to(device) if train_config.ema else None
 
     out_path = Path(out_dir)
@@ -114,6 +124,7 @@ def train_ddpm(
             if train_config.grad_clip is not None:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), train_config.grad_clip)
             optimizer.step()
+            scheduler.step()
             if ema_helper is not None:
                 ema_helper.update(model)
 

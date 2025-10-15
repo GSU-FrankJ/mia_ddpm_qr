@@ -37,7 +37,7 @@ def main() -> None:
     eval_cfg = config.get("eval", {})
     seed = args.seed if args.seed is not None else eval_cfg.get("seed", config.get("seed", 0))
     alpha = args.alpha if args.alpha is not None else eval_cfg.get("alpha", 0.01)
-    mode = args.mode if args.mode is not None else eval_cfg.get("mode", "eps")
+    mode = args.mode if args.mode is not None else eval_cfg.get("mode", "x0")
     eval_config = EvalConfig(
         alpha=alpha,
         mode=mode,
@@ -87,4 +87,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

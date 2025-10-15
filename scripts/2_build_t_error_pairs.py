@@ -35,7 +35,7 @@ def main() -> None:
         raise ValueError("Attack config must include 'dataset'.")
     seed = config.get("seed", 0)
     K = public_cfg.get("K", 12)
-    mode = public_cfg.get("mode", "eps")
+    mode = public_cfg.get("mode", "x0")
     batch_size = public_cfg.get("batch_size", 32)
 
     split = load_split_indices(args.split_json)

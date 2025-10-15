@@ -12,13 +12,6 @@ from torchvision import datasets, transforms
 from attack_qr.utils.seeding import make_generator
 
 
-DATASET_STATS: Dict[str, Tuple[Tuple[float, ...], Tuple[float, ...]]] = {
-    "cifar10": ((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
-    "cifar100": ((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
-    "stl10": ((0.4467, 0.4398, 0.4066), (0.2603, 0.2566, 0.2713)),
-}
-
-
 def get_dataset(dataset_name: str, root: str, download: bool = True) -> Dataset:
     dataset_name = dataset_name.lower()
     if dataset_name == "cifar10":
@@ -31,19 +24,12 @@ def get_dataset(dataset_name: str, root: str, download: bool = True) -> Dataset:
     raise ValueError(f"Unsupported dataset: {dataset_name}")
 
 
-def get_transforms(dataset_name: str, img_size: int, augment: bool = True) -> transforms.Compose:
-    dataset_name = dataset_name.lower()
-    mean, std = DATASET_STATS[dataset_name]
-    ops: List[torch.nn.Module] = []
+def get_transforms(img_size: int, augment: bool = True) -> transforms.Compose:
+    ops: List[torch.nn.Module] = [transforms.Resize(img_size)]
     if augment:
-        ops.extend([transforms.RandomHorizontalFlip(), transforms.RandomCrop(img_size, padding=4)])
-    ops.extend(
-        [
-            transforms.Resize(img_size),
-            transforms.ToTensor(),
-            transforms.Normalize(mean, std),
-        ]
-    )
+        ops.append(transforms.RandomHorizontalFlip())
+    ops.append(transforms.ToTensor())
+    ops.append(transforms.Lambda(lambda x: x * 2.0 - 1.0))
     return transforms.Compose(ops)
 
 
@@ -91,7 +77,7 @@ def dataloader_from_indices(
     img_size: int,
     augment: bool,
 ) -> DataLoader:
-    transform = get_transforms(dataset_name, img_size, augment=augment)
+    transform = get_transforms(img_size, augment=augment)
     wrapped = IndexedDataset(base_dataset, indices=indices, transform=transform)
 
     def _worker_init(worker_id: int) -> None:
@@ -110,4 +96,3 @@ def dataloader_from_indices(
         worker_init_fn=_worker_init,
         generator=generator,
     )
-

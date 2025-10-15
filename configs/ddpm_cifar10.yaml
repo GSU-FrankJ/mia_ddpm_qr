@@ -5,9 +5,10 @@
   train:
     batch_size: 128        # 批次大小
     epochs: 200           # 训练 200 个 epoch
-    lr: 2.0e-4           # 学习率 0.0002
+    lr: 1.0e-4           # 学习率 0.0001（与论文一致）
     betas: [0.9, 0.999]   # Adam 优化器的 beta 参数
     weight_decay: 0.0     # 不使用权重衰减
+    warmup_steps: 500     # 余弦调度前的预热步数
     ema: true            # 启用指数移动平均
     ema_decay: 0.999     # EMA 衰减率
     grad_clip: 1.0       # 梯度裁剪阈值
