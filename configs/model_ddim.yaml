@@ -32,9 +32,11 @@ training:
   amp: true
   log_interval: 500
   checkpoint_interval: 10000
+  fastdev_limit: 2000
 
 data:
   config: configs/data_cifar10.yaml
 
 seed: 20251030
+
 

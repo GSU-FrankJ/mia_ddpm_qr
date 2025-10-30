@@ -77,6 +77,7 @@ def tpr_precision_at_fpr(
         "precision": precision,
         "precision_ci": precision_ci,
         "achieved_fpr": fpr,
+        "fpr_error": fpr - target_fpr,
     }
 
 

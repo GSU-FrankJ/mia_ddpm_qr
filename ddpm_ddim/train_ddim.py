@@ -8,18 +8,23 @@ import os
 import pathlib
 import random
 import subprocess
+import sys
 import time
+from contextlib import nullcontext
 from dataclasses import asdict
 from typing import Dict, Tuple
 
 import torch
 from torch import nn
-from torch.cuda import amp
 from torch.nn import functional as F
 from torch.utils.data import DataLoader, Dataset, Subset
 from torchvision import transforms
 from torchvision.datasets import CIFAR10
 import yaml
+
+PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from mia_logging import get_winston_logger
 from ddpm_ddim.models.unet import UNetModel, UNetConfig, build_unet
@@ -77,6 +82,60 @@ def set_global_seeds(seed: int) -> None:
     torch.cuda.manual_seed_all(seed)
 
 
+def configure_environment(enable_amp: bool) -> Dict[str, object]:
+    state: Dict[str, object] = {}
+
+    if hasattr(torch.backends, "cudnn"):
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
+        if hasattr(torch.backends.cudnn, "allow_tf32"):
+            torch.backends.cudnn.allow_tf32 = False
+        state["cudnn_allow_tf32"] = False
+        if hasattr(torch.backends.cudnn, "fp32_math_mode") and hasattr(torch.backends.cudnn, "FP32MathMode"):
+            try:
+                torch.backends.cudnn.fp32_math_mode = torch.backends.cudnn.FP32MathMode.F32
+            except AttributeError:
+                pass
+            state["cudnn_fp32_math_mode"] = "F32"
+        else:
+            state["cudnn_fp32_math_mode"] = None
+        state["cudnn_benchmark"] = torch.backends.cudnn.benchmark
+        state["cudnn_deterministic"] = torch.backends.cudnn.deterministic
+    else:
+        state["cudnn_benchmark"] = None
+        state["cudnn_deterministic"] = None
+        state["cudnn_allow_tf32"] = None
+        state["cudnn_fp32_math_mode"] = None
+
+    if torch.cuda.is_available() and hasattr(torch.backends, "cuda") and hasattr(torch.backends.cuda, "matmul"):
+        matmul_backend = torch.backends.cuda.matmul
+        if hasattr(matmul_backend, "allow_tf32"):
+            matmul_backend.allow_tf32 = False
+            state["cuda_matmul_allow_tf32"] = False
+        else:
+            state["cuda_matmul_allow_tf32"] = None
+        if hasattr(matmul_backend, "fp32_precision"):
+            try:
+                matmul_backend.fp32_precision = "ieee"
+            except AttributeError:
+                pass
+            state["cuda_matmul_fp32_precision"] = "ieee"
+        else:
+            state["cuda_matmul_fp32_precision"] = None
+    else:
+        state["cuda_matmul_allow_tf32"] = None
+        state["cuda_matmul_fp32_precision"] = None
+
+    torch.set_float32_matmul_precision("high")
+    state["float32_matmul_precision"] = torch.get_float32_matmul_precision()
+
+    amp_enabled = enable_amp and torch.cuda.is_available()
+    state["amp_enabled"] = amp_enabled
+    state["amp_mode"] = "torch.amp.autocast" if amp_enabled else "disabled"
+    state["amp_device"] = "cuda" if amp_enabled else "cpu"
+    return state
+
+
 def load_yaml(path: pathlib.Path) -> Dict:
     with path.open("r", encoding="utf-8") as handle:
         return yaml.safe_load(handle)
@@ -87,7 +146,7 @@ def diffusion_training_step(
     batch: torch.Tensor,
     alphas_bar: torch.Tensor,
     T: int,
-    scaler: amp.GradScaler,
+    scaler: torch.amp.GradScaler | None,
     optimizer: torch.optim.Optimizer,
     grad_clip: float,
 ) -> float:
@@ -100,15 +159,26 @@ def diffusion_training_step(
     sqrt_one_minus = (1 - alpha_bar_t).sqrt()[:, None, None, None]
     xt = sqrt_alpha * batch + sqrt_one_minus * noise
 
-    with amp.autocast(enabled=scaler.is_enabled()):
+    device_type = "cuda" if batch.is_cuda else "cpu"
+    autocast_ctx = (
+        torch.amp.autocast(device_type=device_type, enabled=scaler is not None and scaler.is_enabled())
+        if device_type == "cuda"
+        else nullcontext()
+    )
+    with autocast_ctx:
         pred_noise = model(xt, timesteps)
         loss = F.mse_loss(pred_noise, noise)
 
-    scaler.scale(loss).backward()
-    scaler.unscale_(optimizer)
-    nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-    scaler.step(optimizer)
-    scaler.update()
+    if scaler is not None and scaler.is_enabled():
+        scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)
+        nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        scaler.step(optimizer)
+        scaler.update()
+    else:
+        loss.backward()
+        nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        optimizer.step()
     optimizer.zero_grad(set_to_none=True)
     return loss.item()
 
@@ -134,6 +204,7 @@ def write_run_metadata(
     data_cfg: Dict,
     seed: int,
     mode: str,
+    determinism_state: Dict[str, object],
 ) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
     git_hash = "unknown"
@@ -157,6 +228,7 @@ def write_run_metadata(
             "torch": torch.__version__,
             "cuda_available": torch.cuda.is_available(),
             "cuda_arch": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+            "determinism": determinism_state,
         },
     }
     with (run_dir / "run.json").open("w", encoding="utf-8") as handle:
@@ -186,6 +258,7 @@ def main() -> None:
 
     seed = model_cfg.get("seed", 0)
     set_global_seeds(seed)
+    determinism_state = configure_environment(model_cfg["training"].get("amp", True))
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -220,17 +293,26 @@ def main() -> None:
         weight_decay=model_cfg["training"].get("weight_decay", 0.0),
     )
 
-    scaler = amp.GradScaler(enabled=model_cfg["training"].get("amp", True))
+    use_cuda_amp = torch.cuda.is_available() and model_cfg["training"].get("amp", True)
+    scaler = (
+        torch.amp.GradScaler("cuda", enabled=True)
+        if use_cuda_amp
+        else None
+    )
 
     T = model_cfg["diffusion"]["timesteps"]
     _betas, alphas_bar = build_cosine_schedule(T)
     alphas_bar = alphas_bar.to(device)
 
     iterations = model_cfg["training"]["iterations"][args.mode]
+    if args.mode == "fastdev":
+        fastdev_limit = model_cfg["training"].get("fastdev_limit")
+        if fastdev_limit is not None:
+            iterations = min(iterations, fastdev_limit)
     checkpoint_interval = model_cfg["training"]["checkpoint_interval"]
 
     run_dir = pathlib.Path(model_cfg["experiment"]["output_dir"]) / args.mode
-    write_run_metadata(run_dir, model_cfg, data_cfg, seed, args.mode)
+    write_run_metadata(run_dir, model_cfg, data_cfg, seed, args.mode, determinism_state)
 
     step = 0
     optimizer.zero_grad(set_to_none=True)

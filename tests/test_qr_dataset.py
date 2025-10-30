@@ -29,7 +29,9 @@ def test_quantile_dataset_alignment(monkeypatch, tmp_path):
     }
     dataset = qr_dataset.QuantileRegressionDataset(cfg, scores_path)
     assert len(dataset) == 10
-    image, score = dataset[0]
+    image, score_raw, score_log = dataset[0]
     assert image.shape == (3, 32, 32)
-    assert isinstance(score.item(), float)
+    assert isinstance(score_raw.item(), float)
+    assert torch.allclose(score_log, torch.log1p(score_raw.clamp_min(0)))
+
 

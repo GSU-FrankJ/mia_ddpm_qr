@@ -40,10 +40,10 @@ Fast development mode is available on every Python entry point (`--fastdev`) to 
 ## Key Outputs
 
 - `data/splits/*.json` — deterministic index lists (`member_train`, `eval_in`, `eval_out`, `aux`) guaranteeing zero leakage between training, auxiliary calibration, and evaluation.
-- `runs/ddim_cifar10/<mode>/ckpt_*/` — DDIM checkpoints (`model.ckpt`, `ema.ckpt`, `optim.ckpt`) with `run.json` metadata (git hash, seeds, environment).
+- `runs/ddim_cifar10/<mode>/ckpt_*/` — DDIM checkpoints (`model.ckpt`, `ema.ckpt`, `optim.ckpt`) with `run.json` metadata (git hash, seeds, environment, AMP/determinism switches, TF32 posture).
 - `scores/*.pt` — cached t-error tensors for auxiliary and evaluation sets with timestep metadata.
 - `runs/attack_qr/ensembles/bagging.pt` — serialized bagging ensemble containing per-τ state dictionaries.
-- `reports/<run_id>/` — Markdown + JSON summary, ROC figures, score/threshold histograms, and optional Parquet diagnostics when `pandas`/`pyarrow` are available.
+- `reports/<run_id>/` — Markdown + JSON summary, ROC figures, score/threshold histograms, and Parquet diagnostics (per-image evidence with score/log-score, thresholds per model, final decision, member label).
 
 ## Tests
 
@@ -70,7 +70,7 @@ scores/               # Cached t-error tensors (generated after step 2)
 
 - The DDIM trainer defaults to EMA updates, AMP, and gradient clipping. Use `--mode fastdev` during early development to limit runtime.
 - t-error computation is deterministic: no stochastic noise is injected (`η=0`), making the membership signal reproducible across hardware.
-- Quantile regression uses pinball loss at extremely low τ; bagging mitigates variance and yields robust thresholds for very low false-positive regimes.
+- Quantile regression uses pinball loss on `log1p` t-error scores with a short τ warm-up (default 3 epochs at τ=5e-3) before converging on ultra-low target quantiles; bagging mitigates variance and yields robust thresholds for very low false-positive regimes.
 - Evaluation reports include bootstrap 95% confidence intervals for TPR and precision at FPR targets of 0.1% and 0.01%, plus ROC-AUC summaries.
 
 ## Ethical Use
