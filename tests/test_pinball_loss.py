@@ -17,3 +17,4 @@ def test_pinball_loss_zero_residual():
     loss = pinball_loss(pred, target, tau=0.5)
     assert torch.isclose(loss, torch.tensor(0.0))
 
+

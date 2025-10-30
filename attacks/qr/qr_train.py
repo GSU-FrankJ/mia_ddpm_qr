@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 from typing import Dict, List
 
@@ -27,6 +28,9 @@ class TrainConfig:
     device: torch.device
     early_stop_patience: int = 10
     grad_clip: float = 1.0
+    use_log1p: bool = True
+    warmup_tau: float | None = None
+    warmup_epochs: int = 0
 
 
 @dataclass
@@ -45,7 +49,7 @@ def train_quantile_model(
     optimizer = Adam(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
     scheduler = CosineAnnealingLR(optimizer, T_max=cfg.epochs)
 
-    best_state = None
+    best_state = copy.deepcopy(model.state_dict())
     best_val = float("inf")
     patience = 0
     history = TrainHistory()
@@ -53,11 +57,20 @@ def train_quantile_model(
     for epoch in range(cfg.epochs):
         model.train()
         epoch_loss = 0.0
-        for images, scores in train_loader:
+        tau_active = cfg.tau
+        if cfg.warmup_tau is not None and epoch < cfg.warmup_epochs:
+            tau_active = cfg.warmup_tau
+
+        for batch in train_loader:
+            if len(batch) == 2:
+                images, target_raw = batch
+                target_log = torch.log1p(target_raw.clamp_min(0))
+            else:
+                images, target_raw, target_log = batch
             images = images.to(cfg.device)
-            scores = scores.to(cfg.device)
+            targets = target_log.to(cfg.device) if cfg.use_log1p else target_raw.to(cfg.device)
             preds = model(images)
-            loss = pinball_loss(preds, scores, cfg.tau)
+            loss = pinball_loss(preds, targets, tau_active)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
@@ -68,20 +81,29 @@ def train_quantile_model(
         history.train_losses.append(epoch_loss)
 
         model.eval()
-        val_loss = 0.0
-        with torch.no_grad():
-            for images, scores in val_loader:
-                images = images.to(cfg.device)
-                scores = scores.to(cfg.device)
-                preds = model(images)
-                val_loss += pinball_loss(preds, scores, cfg.tau).item() * images.size(0)
-        val_loss /= len(val_loader.dataset)
+        val_dataset_size = len(val_loader.dataset)
+        if val_dataset_size > 0:
+            val_loss = 0.0
+            with torch.no_grad():
+                for batch in val_loader:
+                    if len(batch) == 2:
+                        images, target_raw = batch
+                        target_log = torch.log1p(target_raw.clamp_min(0))
+                    else:
+                        images, target_raw, target_log = batch
+                    images = images.to(cfg.device)
+                    targets = target_log.to(cfg.device) if cfg.use_log1p else target_raw.to(cfg.device)
+                    preds = model(images)
+                    val_loss += pinball_loss(preds, targets, tau_active).item() * images.size(0)
+            val_loss /= val_dataset_size
+        else:
+            val_loss = epoch_loss
         history.val_losses.append(val_loss)
 
         LOGGER.info(
             "epoch=%d tau=%.5f train_loss=%.6f val_loss=%.6f",
             epoch,
-            cfg.tau,
+            tau_active,
             epoch_loss,
             val_loss,
         )
@@ -89,11 +111,11 @@ def train_quantile_model(
         if val_loss < best_val:
             best_val = val_loss
             patience = 0
-            best_state = model.state_dict()
+            best_state = copy.deepcopy(model.state_dict())
         else:
             patience += 1
             if patience >= cfg.early_stop_patience:
-                LOGGER.info("Early stopping triggered for tau=%.5f", cfg.tau)
+                LOGGER.info("Early stopping triggered for tau=%.5f", tau_active)
                 break
 
     return {
@@ -101,4 +123,5 @@ def train_quantile_model(
         "history": history,
         "best_val": best_val,
     }
+
 

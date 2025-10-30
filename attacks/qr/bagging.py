@@ -18,7 +18,11 @@ LOGGER = get_winston_logger(__name__)
 
 
 class BagOfQuantiles:
-    """Bootstrap ensemble of quantile regressors."""
+    """Bootstrap ensemble of quantile regressors.
+
+    Majority voting is the default decision rule; averaged-threshold voting is
+    available for ablations via ``vote="average"``.
+    """
 
     def __init__(
         self,
@@ -35,9 +39,15 @@ class BagOfQuantiles:
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.models_by_tau: Dict[float, List[SmallCNNQuantile]] = {}
         self.histories_by_tau: Dict[float, List] = {}
+        self.use_log1p: bool = self.base_cfg.get("log1p", True)
 
-    def fit(self, scores_path: pathlib.Path, data_cfg: Dict) -> None:
-        dataset = QuantileRegressionDataset(data_cfg, scores_path)
+    def fit(
+        self,
+        scores_path: pathlib.Path,
+        data_cfg: Dict,
+        limit: int | None = None,
+    ) -> None:
+        dataset = QuantileRegressionDataset(data_cfg, scores_path, limit=limit)
         train_dataset, val_dataset = train_val_split(
             dataset,
             val_ratio=self.base_cfg.get("val_ratio", 0.1),
@@ -52,13 +62,16 @@ class BagOfQuantiles:
         )
 
         generator = torch.Generator().manual_seed(self.seed)
+        warmup_cfg = self.base_cfg.get("tau_warmup", {})
+        warmup_value = warmup_cfg.get("value")
+        warmup_epochs = warmup_cfg.get("epochs", 0)
 
         for tau in self.base_cfg.get("tau_values", [0.001]):
             self.models_by_tau[tau] = []
             self.histories_by_tau[tau] = []
             LOGGER.info("Training bagging ensemble for tau=%.5f", tau)
             for b in range(self.B):
-                bootstrap_size = int(len(train_dataset) * self.bootstrap_ratio)
+                bootstrap_size = max(1, int(len(train_dataset) * self.bootstrap_ratio))
                 bootstrap_indices = torch.randint(
                     low=0,
                     high=len(train_dataset),
@@ -79,6 +92,9 @@ class BagOfQuantiles:
                     weight_decay=self.base_cfg.get("weight_decay", 0.0),
                     tau=tau,
                     device=self.device,
+                    use_log1p=self.use_log1p,
+                    warmup_tau=warmup_value if warmup_epochs > 0 else None,
+                    warmup_epochs=warmup_epochs if warmup_epochs > 0 else 0,
                 )
                 result = train_quantile_model(model, train_loader, val_loader, train_cfg)
                 fitted_model = SmallCNNQuantile()
@@ -102,27 +118,36 @@ class BagOfQuantiles:
             raise ValueError(f"No models trained for tau={tau}")
 
         imgs = imgs.to(self.device)
-        scores_cpu = scores.detach().cpu()
-        thresholds = []
+        scores_cpu = scores.detach().cpu().clamp_min(0)
+        scores_log = torch.log1p(scores_cpu)
+        thresholds_log = []
         for model in ensemble:
             preds = model(imgs)
-            thresholds.append(preds.detach().cpu())
-        thresholds_tensor = torch.stack(thresholds)
+            thresholds_log.append(preds.detach().cpu())
+        thresholds_tensor = torch.stack(thresholds_log)
+        thresholds_raw = torch.expm1(thresholds_tensor).clamp_min(0)
 
         if vote == "average":
             avg_thresholds = thresholds_tensor.mean(dim=0)
-            decisions = (scores_cpu <= avg_thresholds).to(torch.int)
+            decisions = (scores_log <= avg_thresholds).to(torch.int)
             diagnostics = {
-                "thresholds": thresholds_tensor,
-                "avg_thresholds": avg_thresholds,
+                "thresholds_log": thresholds_tensor,
+                "thresholds_raw": thresholds_raw,
+                "avg_thresholds_log": avg_thresholds,
+                "avg_thresholds_raw": torch.expm1(avg_thresholds).clamp_min(0),
+                "scores_log": scores_log,
+                "scores_raw": scores_cpu,
             }
             return decisions, diagnostics
 
-        votes = (scores_cpu <= thresholds_tensor).sum(dim=0)
+        votes = (scores_log <= thresholds_tensor).sum(dim=0)
         decisions = (votes >= (len(ensemble) / 2)).to(torch.int)
         diagnostics = {
-            "thresholds": thresholds_tensor,
+            "thresholds_log": thresholds_tensor,
+            "thresholds_raw": thresholds_raw,
             "votes": votes,
+            "scores_log": scores_log,
+            "scores_raw": scores_cpu,
         }
         return decisions, diagnostics
 

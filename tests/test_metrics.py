@@ -17,3 +17,4 @@ def test_roc_auc_bounds():
     auc = roc_auc(scores_in, scores_out)
     assert 0.0 <= auc <= 1.0
 
+

@@ -5,7 +5,12 @@ from __future__ import annotations
 import argparse
 import pathlib
 import json
+import sys
 from typing import Dict, List, Tuple
+
+PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 import torch
 from torch.utils.data import DataLoader, Dataset, Subset
@@ -134,6 +139,7 @@ def main() -> None:
     parser.add_argument("--data-config", type=pathlib.Path, default=pathlib.Path("configs/data_cifar10.yaml"))
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--fastdev", action="store_true", help="Limit dataset and timesteps for dev runs")
+    parser.add_argument("--checkpoint-root", type=pathlib.Path, default=None, help="Override diffusion checkpoint directory")
     args = parser.parse_args()
 
     attack_cfg = load_yaml(args.config)
@@ -150,9 +156,19 @@ def main() -> None:
     _betas, alphas_bar = build_cosine_schedule(attack_cfg["t_error"]["T"])
     alphas_bar = alphas_bar.to(device)
 
+    checkpoint_root = (
+        pathlib.Path(args.checkpoint_root)
+        if args.checkpoint_root is not None
+        else pathlib.Path(attack_cfg["model"]["checkpoint_root"])
+    )
+    if args.fastdev:
+        fastdev_root = checkpoint_root.parent / "fastdev"
+        if fastdev_root.exists():
+            checkpoint_root = fastdev_root
+
     model = load_model_from_checkpoint(
         pathlib.Path(attack_cfg["model"]["config"]),
-        pathlib.Path(attack_cfg["model"]["checkpoint_root"]),
+        checkpoint_root,
         attack_cfg["model"].get("prefer_ema", True),
         device,
     )

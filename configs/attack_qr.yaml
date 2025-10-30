@@ -2,7 +2,6 @@ seed: 20251030
 target_fprs: [0.001, 0.0001]
 
 t_error:
-t_error:
   T: 1000
   k_uniform: 50
   aggregate: mean
@@ -25,25 +24,11 @@ train:
   weight_decay: 0.0
   cosine_anneal: true
   val_ratio: 0.1
+  log1p: true
+  tau_warmup:
+    epochs: 3
+    value: 0.005
 
 logging:
   level: INFO
   output_dir: runs/attack_qr
-dataset: cifar10
-seed: 0
-img_size: 32
-public:
-  K: 12                    # 每个样本生成 12 个时间步误差对
-  mode: x0                # 默认使用 x0 重建误差（论文主设定）
-  timesteps: uniform      # 时间步采样方式：均匀分布
-  batch_size: 32          # 生成误差对时的批次大小
-qr:
-  arch: resnet18          # 使用 ResNet-18 作为量化回归模型架构
-  opt: adam              # 使用 Adam 优化器
-  lr: 1.0e-3            # 学习率 0.001
-  epochs: 30            # 训练 30 个 epoch
-  batch_size: 256       # 训练批次大小 256
-  alpha_list: [0.01, 0.001]  # 正则化参数列表，用于模型选择
-bagging:
-  M: 16                 # 训练 16 个不同的量化回归模型
-  bootstrap: true       # 启用 Bootstrap 采样
