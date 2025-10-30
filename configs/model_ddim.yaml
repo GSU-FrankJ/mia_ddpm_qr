@@ -1,0 +1,40 @@
+experiment:
+  name: ddim_cifar10
+  output_dir: runs/ddim_cifar10
+  resume: null
+
+model:
+  channels: 128
+  channel_mults: [1, 2, 2, 2]
+  num_res_blocks: 2
+  attention_resolutions: [16]
+  dropout: 0.0
+  in_channels: 3
+  out_channels: 3
+
+diffusion:
+  timesteps: 1000
+  schedule: cosine
+  ddim_eta: 0.0
+
+training:
+  iterations:
+    main: 400000
+    fastdev: 100000
+  batch_size: 128
+  lr: 0.0002
+  weight_decay: 0.0
+  optimizer: adamw
+  betas: [0.9, 0.999]
+  grad_clip: 1.0
+  ema_decay: 0.9999
+  ema_update_every: 1
+  amp: true
+  log_interval: 500
+  checkpoint_interval: 10000
+
+data:
+  config: configs/data_cifar10.yaml
+
+seed: 20251030
+

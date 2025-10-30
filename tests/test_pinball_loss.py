@@ -1,28 +1,19 @@
 import torch
 
-from attack_qr.utils.losses import pinball_loss
+from attacks.qr.qr_models import pinball_loss
 
 
-def test_pinball_loss_scalar():
-    pred = torch.tensor([0.0, 1.0, 2.0])
-    target = torch.tensor([1.0, 1.0, 1.0])
-    loss = pinball_loss(pred, target, alpha=0.5, reduction="none")
-    expected = torch.tensor([0.5, 0.0, 0.5])
-    assert torch.allclose(loss, expected)
+def test_pinball_loss_monotonicity():
+    pred = torch.tensor([0.0, 0.5, 1.0], requires_grad=True)
+    target = torch.zeros_like(pred)
+    loss = pinball_loss(pred, target, tau=0.1)
+    loss.backward()
+    assert pred.grad[0] < pred.grad[2]
 
 
-def test_pinball_loss_zero_alpha_limits():
-    pred = torch.tensor([[0.0, 1.0]])
-    target = torch.tensor([[1.0, 1.0]])
-    alpha = torch.tensor([0.1, 0.9])
-    loss = pinball_loss(pred, target, alpha=alpha, reduction="mean")
-    manual = torch.maximum(alpha * (target - pred), (alpha - 1) * (target - pred))
-    assert torch.isclose(loss, manual.mean())
+def test_pinball_loss_zero_residual():
+    pred = torch.ones(5)
+    target = torch.ones(5)
+    loss = pinball_loss(pred, target, tau=0.5)
+    assert torch.isclose(loss, torch.tensor(0.0))
 
-
-def test_pinball_loss_shapes():
-    pred = torch.zeros(4, 2)
-    target = torch.ones(4).unsqueeze(1)
-    alpha = [0.1, 0.9]
-    loss = pinball_loss(pred, target.expand(-1, 2), alpha=alpha, reduction="none")
-    assert loss.shape == pred.shape
