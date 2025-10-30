@@ -1,95 +1,78 @@
-# QR-MIA Diffusion Pipeline
+# QR-MIA for Deterministic DDIM Membership Auditing
 
-End-to-end, deterministic white-box membership inference attack (MIA) for diffusion models using quantile regression with bagging (QR-MIA). The repository trains a DDPM on CIFAR-10, derives deterministic t-error features, fits quantile-regression weak learners, and evaluates white-box membership leakage.
+End-to-end, reproducible white-box membership inference pipeline targeting a DDIM trained from scratch on CIFAR-10. The workflow consists of deterministic data splits, DDIM training, t-error score extraction over uniform timesteps, quantile-regression threshold learning with bagging, and comprehensive evaluation with auditable reports.
 
-## Features
-- Deterministic dataset splits with saved indices for exact reproducibility.
-- DDPM training (UNet, linear beta schedule) with EMA checkpoints and logging.
-- Deterministic t-error computation (`eps` and `x0` modes) using Philox seeded noise.
-- Quantile regression ensemble (ResNet-Tiny weak learners, bagging) predicting per-sample thresholds.
-- White-box MIA evaluation with ROC/AUC, calibrated TPR@FPR (1% / 0.1%), bootstrap CIs, and artifact logging (CSV/JSON/Markdown).
-- Unit tests covering pinball loss, deterministic t-errors, and split protocol.
+## Environment Setup
 
-## Setup
 ```bash
-# Clone this repo, then create an environment
-conda env create -f environment.yml
+# create a clean environment (PyTorch 2.1+ recommended)
+conda create -n qr-mia python=3.10 -y
 conda activate qr-mia
-# or: pip install -r requirements.txt
-```
-> **Note:** PyTorch ≥ 2.1 and torchvision ≥ 0.16 are required. Install the CUDA build that matches your system, e.g.:
-> `pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121`
+pip install -r requirements.txt
 
-## Quickstart
-All commands assume execution from the repository root.
+# install a CUDA build if desired, e.g. for CUDA 12.1
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+```
+
+All scripts rely on PyTorch ≥ 2.1 and torchvision ≥ 0.16. The helper shell scripts assume execution from the repository root.
+
+## One-Shot Pipeline
 
 ```bash
-# 0) Prepare splits (stores indices under runs/splits/)
-python scripts/0_prepare_data.py --dataset cifar10 --seed 0 \
-  --out runs/splits/cifar10_seed0.json
+# 0) Deterministic train/aux/eval splits
+bash scripts/split_cifar10.sh
 
-# 1) Train DDPM (creates runs/ddpm/cifar10/)
-python scripts/1_train_ddpm.py --config configs/ddpm_cifar10.yaml \
-  --split_json runs/splits/cifar10_seed0.json \
-  --out runs/ddpm/cifar10
+# 1) Train DDIM (400k iterations by default; add --mode fastdev for a smoke run)
+bash scripts/train_ddim_cifar10.sh --mode main --config configs/model_ddim.yaml --data configs/data_cifar10.yaml
 
-# 2) Build deterministic t-error pairs (NPZ + metadata)
-python scripts/2_build_t_error_pairs.py --config configs/attack_qr.yaml \
-  --split_json runs/splits/cifar10_seed0.json \
-  --ddpm_ckpt runs/ddpm/cifar10/best.pt \
-  --out runs/qr/pairs_cifar10.npz
+# 2) Cache t-error scores for aux/eval sets (50 uniform steps by default)
+bash scripts/compute_scores.sh --config configs/attack_qr.yaml
 
-# 3) Train quantile-regression ensemble
-python scripts/3_train_qr_bagging.py --config configs/attack_qr.yaml \
-  --pairs runs/qr/pairs_cifar10.npz \
-  --out runs/qr/models
+# 3) Train the quantile-regression ensemble with bagging (B=50, τ∈{1e-3,1e-4})
+bash scripts/train_qr.sh --config configs/attack_qr.yaml
 
-# 4) Evaluate white-box MIA
-python scripts/4_eval_attack.py --config configs/eval.yaml \
-  --split_json runs/splits/cifar10_seed0.json \
-  --ddpm_ckpt runs/ddpm/cifar10/best.pt \
-  --qr_dir runs/qr/models \
-  --report runs/eval/cifar10_report.json
+# 4) Evaluate and emit Markdown/JSON/plots under reports/<run_id>/
+bash scripts/eval_qr.sh --config configs/attack_qr.yaml
 ```
-Expected ranges (dependent on training quality): `AUC ≳ 0.95`, `TPR@FPR=1% ≳ 0.7`, `TPR@FPR=0.1% ≳ 0.4` when using the provided configuration and a well-trained DDPM.
 
-Artifacts:
-- `runs/ddpm/<dataset>/`: checkpoints (`epoch_*.pt`, `best.pt`), training logs, metadata.
-- `runs/qr/pairs_*.npz`: deterministic t-error pairs + metadata JSON.
-- `runs/qr/models/`: ensemble checkpoints, manifest JSON.
-- `runs/eval/`: raw scores (`csv/json`), summary table, final report.
+Fast development mode is available on every Python entry point (`--fastdev`) to operate on ~1k images and five timesteps for quick sanity checks.
 
-## Reproducibility
-- All runs use explicit seeds (see configs) and set deterministic CuDNN flags.
-- Split JSON stores exact Z/Public/Holdout indices (`runs/splits/*`).
-- Philox noise seeds are derived from `(dataset, sample_index, timestep, global_seed)` ensuring deterministic t-errors across devices.
-- Bagging manifest logs per-model seeds and sampled bootstrap indices.
+## Key Outputs
 
-## Tests & Validation
+- `data/splits/*.json` — deterministic index lists (`member_train`, `eval_in`, `eval_out`, `aux`) guaranteeing zero leakage between training, auxiliary calibration, and evaluation.
+- `runs/ddim_cifar10/<mode>/ckpt_*/` — DDIM checkpoints (`model.ckpt`, `ema.ckpt`, `optim.ckpt`) with `run.json` metadata (git hash, seeds, environment).
+- `scores/*.pt` — cached t-error tensors for auxiliary and evaluation sets with timestep metadata.
+- `runs/attack_qr/ensembles/bagging.pt` — serialized bagging ensemble containing per-τ state dictionaries.
+- `reports/<run_id>/` — Markdown + JSON summary, ROC figures, score/threshold histograms, and optional Parquet diagnostics when `pandas`/`pyarrow` are available.
+
+## Tests
+
 ```bash
 python -m pytest
 ```
-The current CI run exercises the deterministic t-error logic, pinball loss, and split protocol. Scripts were smoke-tested; ensure PyTorch/torchvision are installed before running data preparation (import failure indicates incompatible versions).
 
-## Directory Layout
+Tests cover the t-error shape/step selection, pinball loss monotonicity, bagging majority voting, split reproducibility, metric sanity, and dataset alignment utilities.
+
+## Directory Overview
+
 ```
-repo_root/
-  configs/                # YAML configs for training/attack/eval
-  ddpm/                   # Diffusion model code (models, schedules, engines)
-  attack_qr/              # QR-MIA modules (features, models, engines, utils)
-  scripts/                # CLI entrypoints 0-4 (pipeline stages)
-  tests/                  # Unit tests
-  runs/                   # Output directories (empty placeholder tracked)
-  requirements.txt
-  environment.yml
-  README.md
-  LICENSE
+configs/              # YAML configs for data, model, and attack stages
+data/                 # README plus reproducible split indices
+ddpm_ddim/            # UNet model, cosine schedule, deterministic forward/reverse, trainer
+attacks/              # t-error scoring, quantile datasets/models, bagging, evaluation tooling
+scripts/              # Pipeline shells and Python CLIs
+tests/                # Pytest suite ensuring determinism and metric correctness
+reports/              # Generated during evaluation (ignored until created)
+scores/               # Cached t-error tensors (generated after step 2)
 ```
 
-## Usage Notes & Tips
-- Training duration: DDPM ~200 epochs on CIFAR-10 (expect several GPU hours). Adjust epochs/batch-size in `configs/ddpm_cifar10.yaml` for faster prototyping.
-- To explore `x0` t-error mode, set `public.mode: x0` and pass `--mode x0` at evaluation.
-- For additional datasets (e.g., CIFAR-100), replicate configs with a new dataset name; the split script handles stratification automatically.
+## Notes
 
-## Ethics & Intended Use
-This project is for privacy auditing and red-team research on generative models trained on consensual, public datasets. **Do not** apply the pipeline to sensitive or non-consensual data. Always follow local regulations and institutional review policies when evaluating privacy risks.
+- The DDIM trainer defaults to EMA updates, AMP, and gradient clipping. Use `--mode fastdev` during early development to limit runtime.
+- t-error computation is deterministic: no stochastic noise is injected (`η=0`), making the membership signal reproducible across hardware.
+- Quantile regression uses pinball loss at extremely low τ; bagging mitigates variance and yields robust thresholds for very low false-positive regimes.
+- Evaluation reports include bootstrap 95% confidence intervals for TPR and precision at FPR targets of 0.1% and 0.01%, plus ROC-AUC summaries.
+
+## Ethical Use
+
+This project is intended for privacy auditing and security research on publicly available datasets. Do not apply the codebase to sensitive or proprietary data without explicit authorization and adherence to local regulations.

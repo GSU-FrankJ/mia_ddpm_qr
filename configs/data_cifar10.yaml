@@ -1,0 +1,27 @@
+dataset:
+  name: cifar10
+  root: data/cifar10
+  download: true
+  image_shape: [3, 32, 32]
+  normalization:
+    mean: [0.4914, 0.4822, 0.4465]
+    std: [0.2470, 0.2435, 0.2616]
+  num_workers: 8
+
+splits:
+  seed: 20251030
+  paths:
+    aux: data/splits/aux.json
+    eval_in: data/splits/eval_in.json
+    eval_out: data/splits/eval_out.json
+    member_train: data/splits/member_train.json
+
+training:
+  batch_size: 128
+  shuffle: true
+
+misc:
+  torch_seed: 20251030
+  numpy_seed: 20251030
+  python_seed: 20251030
+
