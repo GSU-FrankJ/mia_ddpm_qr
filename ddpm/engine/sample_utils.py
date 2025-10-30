@@ -62,7 +62,10 @@ def p_sample(
     generator: Optional[torch.Generator] = None,
 ) -> torch.Tensor:
     mean, var, log_var, _, _ = p_mean_variance(model, schedule, x, t)
-    noise = torch.randn_like(x, generator=generator)
+    if generator is None:
+        noise = torch.randn_like(x)
+    else:
+        noise = torch.randn(x.shape, device=x.device, dtype=x.dtype, generator=generator)
     nonzero_mask = (t != 0).float().view(-1, *((1,) * (x.ndim - 1)))
     return mean + nonzero_mask * torch.exp(0.5 * log_var) * noise
 
@@ -76,9 +79,11 @@ def sample(
 ) -> torch.Tensor:
     model.eval()
     with torch.no_grad():
-        x = torch.randn(shape, device=device, generator=generator)
+        if generator is None:
+            x = torch.randn(shape, device=device)
+        else:
+            x = torch.randn(shape, device=device, generator=generator)
         for t_idx in reversed(range(schedule.T)):
             t = torch.full((shape[0],), t_idx, device=device, dtype=torch.long)
             x = p_sample(model, schedule, x, t, generator=generator)
         return x
-

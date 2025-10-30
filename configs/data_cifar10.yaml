@@ -1,0 +1,30 @@
+# CIFAR-10 Dataset Configuration
+# Defines dataset root, normalization, and split seeds for reproducibility
+
+dataset:
+  name: "cifar10"
+  root: "data/cifar10"  # Auto-downloads if not present
+  image_size: 32
+  num_channels: 3
+  num_classes: 10
+
+# Normalization parameters (CIFAR-10 statistics)
+normalization:
+  mean: [0.4914, 0.4822, 0.4465]
+  std: [0.2023, 0.1994, 0.2010]
+
+# Reproducible split seeds
+# Each split uses a different seed to ensure independence
+splits:
+  seed: 20251030  # Main seed for split generation
+  member_train_size: 40000  # Images used to train DDIM
+  eval_in_size: 5000  # Positive samples (from member_train, excluded from QR)
+  eval_out_size: 5000  # Negative samples (from remaining 10k train images, never seen by DDIM)
+  aux_size: 10000  # Full test set for QR training/calibration only
+
+# Data loader settings
+dataloader:
+  num_workers: 4
+  pin_memory: true
+  persistent_workers: true
+

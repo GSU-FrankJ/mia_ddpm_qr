@@ -1,18 +1,100 @@
-dataset: cifar10
-seed: 0
-img_size: 32
-public:
-  K: 12                    # 每个样本生成 12 个时间步误差对
-  mode: x0                # 默认使用 x0 重建误差（论文主设定）
-  timesteps: uniform      # 时间步采样方式：均匀分布
-  batch_size: 32          # 生成误差对时的批次大小
+# QR-MIA Attack Configuration
+# Configures t-error scoring, quantile regression training, and bagging
+
+# Reproducibility
+seed: 20251030
+
+# Target FPRs for evaluation
+target_fprs: [0.001, 0.0001]  # 0.1% and 0.01%
+
+# t-error score configuration
+t_error:
+  T: 1000  # Total timesteps (must match DDIM training)
+  k_uniform: 50  # Number of uniform timesteps to sample
+  aggregate: "mean"  # Aggregation method: mean|min|q10
+  
+  # Cache paths
+  cache_dir: "scores"
+  aux_cache: "scores/aux_scores.pt"
+  eval_in_cache: "scores/eval_in_scores.pt"
+  eval_out_cache: "scores/eval_out_scores.pt"
+
+# Quantile regression configuration
 qr:
-  arch: resnet18          # 使用 ResNet-18 作为量化回归模型架构
-  opt: adam              # 使用 Adam 优化器
-  lr: 1.0e-3            # 学习率 0.001
-  epochs: 30            # 训练 30 个 epoch
-  batch_size: 256       # 训练批次大小 256
-  alpha_list: [0.01, 0.001]  # 正则化参数列表，用于模型选择
+  # Quantile levels to learn
+  quantiles: [0.001, 0.0001]  # tau values
+  
+  # Model architecture
+  model:
+    type: "SmallCNNQuantile"
+    channels: [64, 128, 128]  # Channel progression
+    kernel_size: 3
+    stride: 2
+    dropout: 0.1
+  
+  # Training configuration
+  train:
+    epochs: 50
+    batch_size: 256
+    lr: 1e-3
+    weight_decay: 1e-5
+    
+    # Validation split from aux (90/10)
+    val_ratio: 0.1
+    
+    # Optimizer
+    optimizer: "AdamW"
+    betas: [0.9, 0.999]
+    
+    # Learning rate schedule
+    lr_schedule: "cosine"
+    warmup_epochs: 5
+    
+    # Early stopping
+    early_stopping:
+      enabled: true
+      patience: 10
+      min_delta: 1e-6
+  
+  # Data paths
+  data:
+    aux_indices_json: "data/splits/aux.json"
+    image_root: "data/cifar10"
+  
+  # Output paths
+  output:
+    model_dir: "runs/qr_models"
+    checkpoint_dir: "runs/qr_checkpoints"
+
+# Bagging configuration
 bagging:
-  M: 16                 # 训练 16 个不同的量化回归模型
-  bootstrap: true       # 启用 Bootstrap 采样
+  B: 50  # Number of bootstrap models
+  bootstrap_ratio: 0.8  # Fraction of aux data to sample per model
+  seed: 20251030  # Base seed for bagging (each model gets seed + model_idx)
+
+# Evaluation configuration
+eval:
+  # Input paths
+  eval_in_indices_json: "data/splits/eval_in.json"
+  eval_out_indices_json: "data/splits/eval_out.json"
+  
+  # QR model paths
+  qr_model_dir: "runs/qr_models"
+  
+  # Output paths
+  report_dir: "reports"
+  
+  # Metrics
+  bootstrap_ci_samples: 1000  # Bootstrap samples for confidence intervals
+  ci_level: 0.95  # Confidence level
+
+# DDIM model path (for loading during scoring)
+ddim:
+  checkpoint_path: "runs/ddpm_cifar10/model.ckpt"
+  ema_checkpoint_path: "runs/ddpm_cifar10/ema.ckpt"
+
+# Fast dev mode (for quick testing)
+fastdev:
+  enabled: false
+  max_images: 1000
+  max_timesteps: 5

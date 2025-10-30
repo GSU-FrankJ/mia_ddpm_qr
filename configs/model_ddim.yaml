@@ -1,0 +1,71 @@
+# DDIM Model Configuration
+# Configures UNet architecture, noise schedule, and training hyperparameters
+
+model:
+  name: "ddim_cifar10"
+  architecture: "unet"
+  
+  # UNet architecture parameters
+  unet:
+    in_channels: 3
+    out_channels: 3
+    model_channels: 128  # Base channel count
+    channel_mult: [1, 2, 2, 2]  # Channel multipliers per resolution level
+    num_res_blocks: 2  # ResBlocks per resolution level
+    attention_resolutions: [16]  # Resolutions to apply attention
+    dropout: 0.0
+    use_scale_shift_norm: true
+
+# Noise schedule (cosine)
+schedule:
+  type: "cosine"
+  T: 1000  # Total timesteps
+  beta_start: 0.0001
+  beta_end: 0.02
+
+# Training configuration
+training:
+  batch_size: 128
+  num_iterations: 400000  # --main mode
+  fastdev_iterations: 100000  # --fastdev mode
+  
+  optimizer:
+    type: "AdamW"
+    lr: 2e-4
+    betas: [0.9, 0.999]
+    weight_decay: 0.01
+  
+  # Exponential Moving Average
+  ema:
+    enabled: true
+    decay: 0.9999
+  
+  # Mixed precision training
+  amp:
+    enabled: true
+    dtype: "float16"
+  
+  # Gradient clipping
+  grad_clip: 1.0
+  
+  # Checkpointing
+  checkpoint:
+    save_every: 10000  # Save every N iterations
+    keep_last: 5  # Keep last N checkpoints
+  
+  # Logging
+  log_every: 100
+  eval_every: 5000
+
+# Paths
+paths:
+  checkpoint_dir: "runs/ddpm_cifar10"
+  data_split_json: "data/splits/splits.json"  # Will be created by split script
+
+# Reproducibility
+seed: 20251030
+
+# Runtime settings
+device: "cuda"
+deterministic: true
+
